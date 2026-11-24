@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>U.S. Congressional Delegation Map</title>
+  
+  <!-- Tailwind CSS & D3 / TopoJSON -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            democrat: '#2563eb',
+            republican: '#dc2626',
+            independent: '#059669',
+          }
+        }
+      }
+    }
+  </script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+
+  <style>
+    body {
+      overscroll-behavior-y: contain;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    
+    .state-path {
+      cursor: pointer;
+      transition: fill 0.2s ease, stroke 0.2s ease, filter 0.2s ease;
+    }
+    .state-path:hover {
+      filter: brightness(1.08);
+    }
+    .state-label {
+      pointer-events: none;
+      font-weight: 700;
+      user-select: none;
+    }
+    
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.4);
+      border-radius: 9999px;
+    }
+    .dark ::-webkit-scrollbar-thumb {
+      background: rgba(71, 85, 105, 0.6);
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spinning {
+      animation: spin 1s linear infinite;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col bg-slate-100 text-slate-800 dark:bg-slate-950 dark:text-slate-100 antialiased overflow-hidden">
+
+  <!-- ==================== MAIN HEADER ==================== -->
+  <header class="w-full bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 pb-3 shadow-sm z-30 transition-colors flex-shrink-0"
+          style="padding-top: max(2.8rem, env(safe-area-inset-top));">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      
+      <!-- Title & Subtitle -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-slate-900 dark:bg-slate-800 text-white flex items-center justify-center shadow-md flex-shrink-0">
+          <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M3 10h18M5 10v11M19 10v11M9 10v11M15 10v11M12 2l9 5H3l9-5z"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-base sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white leading-tight">
+            U.S. Congressional Delegation Map
+          </h1>
+          <p class="text-xs text-slate-500 dark:text-slate-400 leading-normal">
+            Click any state to view senators, representatives, D.C. offices, phones, X handles & email forms
+          </p>
+        </div>
+      </div>
+
+      <!-- Controls & Quick Actions -->
+      <div class="flex flex-wrap items-center gap-2">
+        <span id="api-status-pill" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+          <span id="api-status-dot" class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span id="api-status-text">50 States • 100 Senators • 435 House Reps</span>
+        </span>
+
+        <!-- Info & Cycles Trigger Modal -->
+        <button id="info-modal-trigger-btn" class="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors" title="Info & Cycles">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke-width="2"/>
+            <path stroke-linecap="round" stroke-width="2" d="M12 16v-4m0-4h.01"/>
+          </svg>
+        </button>
+
+        <!-- Refresh Page / Live Data Sync Button -->
+        <button id="refresh-page-btn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+          <svg id="refresh-icon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          <span id="refresh-btn-text">Refresh Data</span>
+        </button>
+
+        <!-- Light / Dark Rocker Toggle -->
+        <label class="flex items-center cursor-pointer select-none ml-1">
+          <input type="checkbox" id="theme-toggle" class="sr-only">
+          <div class="w-11 h-6 bg-slate-300 dark:bg-indigo-600 rounded-full transition-colors relative">
+            <div id="theme-toggle-dot" class="w-4 h-4 bg-white rounded-full absolute top-1 left-1 transition-transform"></div>
+          </div>
+          <span id="theme-label" class="ml-2 text-xs font-medium text-slate-700 dark:text-slate-200">Light</span>
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== SUB-HEADER / MAP GUIDANCE BAR ==================== -->
+  <div class="w-full bg-slate-50 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 px-4 py-2 flex items-center justify-between z-20 flex-shrink-0">
+    <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+      <svg class="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" stroke-width="2"/>
+        <path stroke-linecap="round" stroke-width="2" d="M12 7v5l3 3"/>
+      </svg>
+      <span>Click any state to inspect & zoom • Pan & mouse scroll enabled</span>
+    </div>
+
+    <!-- Clear Selection Button -->
+    <button id="clear-selection-btn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shadow-sm">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+      </svg>
+      <span>Clear Selection</span>
+    </button>
+  </div>
+
+  <!-- ==================== MAP & DETAILS WORKSPACE ==================== -->
+  <main class="relative flex-1 w-full overflow-hidden flex">
+    
+    <!-- Map Canvas Viewport -->
+    <div id="map-viewport" class="relative w-full h-full flex items-center justify-center">
+      <svg id="congress-map-svg" class="w-full h-full cursor-grab active:cursor-grabbing"></svg>
+
+      <!-- Zoom Out Overlay Button -->
+      <button id="zoom-out-btn" class="hidden absolute bottom-6 left-6 z-10 items-center gap-2 px-4 py-2 bg-white/95 dark:bg-slate-800/95 backdrop-blur border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all">
+        <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7"/>
+        </svg>
+        <span>Zoom Out to USA</span>
+      </button>
+    </div>
+
+    <!-- Right Side Details Drawer with Top Notch & Bottom Inset Protection -->
+    <aside id="details-panel-container" class="fixed sm:absolute top-0 right-0 h-full w-full sm:w-[460px] md:w-[500px] bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl z-40 transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col"
+           style="padding-top: max(2.8rem, env(safe-area-inset-top)); padding-bottom: max(1rem, env(safe-area-inset-bottom));">
+      
+      <!-- Drawer Header -->
+      <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50 flex-shrink-0">
+        <div>
+          <span id="drawer-state-tag" class="text-xs font-extrabold tracking-wider uppercase text-indigo-600 dark:text-indigo-400">STATE DELEGATION</span>
+          <h2 id="drawer-state-title" class="text-xl font-bold text-slate-900 dark:text-white leading-tight">Select a State</h2>
+        </div>
+        
+        <!-- Close Button -->
+        <button id="close-details-btn" class="w-9 h-9 rounded-full border-2 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 hover:border-red-400 dark:hover:border-red-500 flex items-center justify-center shadow-md transition-all duration-200 transform hover:scale-110" title="Close Panel">
+          <svg class="w-5 h-5 stroke-[2.75]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Drawer Content with Safe Bottom Padding -->
+      <div id="drawer-content-body" class="p-5 pb-20 overflow-y-auto space-y-6 flex-1">
+        <!-- Rendered dynamically from live API -->
+      </div>
+    </aside>
+  </main>
+
+  <!-- ==================== INFO & CYCLES MODAL ==================== -->
+  <div id="info-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm hidden">
+    <div class="relative w-full max-w-[615px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-7 sm:p-8 shadow-[0_25px_65px_rgba(0,0,0,0.35),0_50px_110px_rgba(0,0,0,0.25)] dark:shadow-[0_35px_80px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.08)] transform transition-all">
+      
+      <button id="close-info-modal-btn" class="absolute top-5 right-5 w-9 h-9 rounded-full border-2 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400 hover:border-red-400 dark:hover:border-red-500 flex items-center justify-center shadow-md transition-all duration-200 transform hover:scale-110" title="Close">
+        <svg class="w-5 h-5 stroke-[2.75]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-indigo-600 dark:text-indigo-400 flex-shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke-width="2"/>
+            <path stroke-linecap="round" stroke-width="2" d="M12 16v-4m0-4h.01"/>
+          </svg>
+        </div>
+        <div>
+          <h3 class="text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-tight">
+            Congressional Representation & Terms
+          </h3>
+          <p class="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+            Live Official Legislative Dataset via @unitedstates/congress-legislators
+          </p>
+        </div>
+      </div>
+
+      <div class="space-y-4 text-sm sm:text-base text-slate-600 dark:text-slate-300 leading-relaxed">
+        <p>
+          Each state is represented by <strong>two U.S. Senators</strong> serving staggered 6-year terms, and a proportional delegation of <strong>U.S. Representatives</strong> serving 2-year terms across 435 single-member districts.
+        </p>
+
+        <div class="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-800">
+          <h4 class="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-900 dark:text-slate-100 mb-2">
+            Senate Class Cycles
+          </h4>
+          <ul class="text-xs sm:text-sm space-y-1.5 list-disc list-inside text-slate-600 dark:text-slate-300">
+            <li><strong>Class I:</strong> Next general election in <strong>November 2030</strong> (33 Seats)</li>
+            <li><strong>Class II:</strong> Next general election in <strong>November 2026</strong> (33 Seats)</li>
+            <li><strong>Class III:</strong> Next general election in <strong>November 2028</strong> (34 Seats)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== SCRIPT & LIVE API ENGINE ==================== -->
+  <script>
+    const API_LEGISLATORS_URL = "https://raw.githubusercontent.com/unitedstates/congress-legislators/gh-pages/legislators-current.json";
+    const API_SOCIAL_MEDIA_URL = "https://raw.githubusercontent.com/unitedstates/congress-legislators/gh-pages/legislators-social-media.json";
+
+    const STATE_NAMES = {
+      "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+      "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+      "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+      "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+      "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri",
+      "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+      "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio",
+      "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+      "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont",
+      "VA": "Virginia", "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming"
+    };
+
+    const FIPS_TO_POSTAL = {
+      "01":"AL","02":"AK","04":"AZ","05":"AR","06":"CA","08":"CO","09":"CT","10":"DE","12":"FL",
+      "13":"GA","15":"HI","16":"ID","17":"IL","18":"IN","19":"IA","20":"KS","21":"KY","22":"LA",
+      "23":"ME","24":"MD","25":"MA","26":"MI","27":"MN","28":"MS","29":"MO","30":"MT","31":"NE",
+      "32":"NV","33":"NH","34":"NJ","35":"NM","36":"NY","37":"NC","38":"ND","39":"OH","40":"OK",
+      "41":"OR","42":"PA","44":"RI","45":"SC","46":"SD","47":"TN","48":"TX","49":"UT","50":"VT",
+      "51":"VA","53":"WA","54":"WV","55":"WI","56":"WY"
+    };
+
+    let SENATORS_DATA = {};
+    let HOUSE_DATA = {};
+
+    let selectedStatePostal = null;
+    let usTopoData = null;
+    let svg, g, zoomBehavior;
+    let width = 960, height = 600;
+
+    // --- Dynamic API Data Loader with Social Media & Official Form Mapping ---
+    async function loadCongressionalData(forceNetwork = false) {
+      const refreshBtn = document.getElementById('refresh-page-btn');
+      const refreshIcon = document.getElementById('refresh-icon');
+      const refreshText = document.getElementById('refresh-btn-text');
+      const statusDot = document.getElementById('api-status-dot');
+      const statusText = document.getElementById('api-status-text');
+
+      refreshIcon.classList.add('spinning');
+      refreshBtn.classList.add('opacity-75', 'pointer-events-none');
+      refreshText.textContent = "Syncing...";
+
+      const cachedSenators = localStorage.getItem('cached_senators_v3');
+      const cachedHouse = localStorage.getItem('cached_house_v3');
+
+      if (!forceNetwork && cachedSenators && cachedHouse) {
+        try {
+          SENATORS_DATA = JSON.parse(cachedSenators);
+          HOUSE_DATA = JSON.parse(cachedHouse);
+          statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
+          statusText.textContent = "Live Cached • 100 Sens • 435 Reps";
+          refreshIcon.classList.remove('spinning');
+          refreshBtn.classList.remove('opacity-75', 'pointer-events-none');
+          refreshText.textContent = "Refresh Data";
+          return;
+        } catch (e) {
+          console.warn("Cached data parse error, refetching fresh from network...", e);
+        }
+      }
+
+      try {
+        statusDot.className = "w-2 h-2 rounded-full bg-amber-400";
+        statusText.textContent = "Fetching Live Congress API...";
+
+        // Fetch Legislators and Social Accounts concurrently
+        const [legResponse, socialResponse] = await Promise.allSettled([
+          fetch(API_LEGISLATORS_URL, { cache: 'no-cache' }),
+          fetch(API_SOCIAL_MEDIA_URL, { cache: 'no-cache' })
+        ]);
+
+        if (legResponse.status !== 'fulfilled' || !legResponse.value.ok) {
+          throw new Error("Failed to fetch primary legislators dataset");
+        }
+
+        const legislators = await legResponse.value.json();
+
+        // Build social lookup map (bioguide_id -> social handles)
+        const socialMap = {};
+        if (socialResponse.status === 'fulfilled' && socialResponse.value.ok) {
+          try {
+            const socialData = await socialResponse.value.json();
+            socialData.forEach(item => {
+              if (item.id && item.id.bioguide && item.social) {
+                socialMap[item.id.bioguide] = item.social;
+              }
+            });
+          } catch (e) {
+            console.warn("Could not parse social media records:", e);
+          }
+        }
+
+        const newSenators = {};
+        const newHouse = {};
+
+        legislators.forEach(leg => {
+          if (!leg.terms || leg.terms.length === 0) return;
+          const term = leg.terms[leg.terms.length - 1];
+          const state = term.state;
+          if (!state) return;
+
+          const fullName = `${leg.name.official_full || (leg.name.first + ' ' + leg.name.last)}`;
+          const party = term.party === 'Democrat' ? 'Democrat' 
+                      : term.party === 'Republican' ? 'Republican' 
+                      : (term.party || 'Independent');
+
+          const officialUrl = term.url || (leg.terms.slice().reverse().find(t => t.url)?.url) || null;
+          const contactForm = term.contact_form || officialUrl;
+
+          // Resolve X handle from social dataset or term properties
+          const bioguideId = leg.id?.bioguide;
+          const socialEntry = bioguideId ? socialMap[bioguideId] : null;
+          const twitterHandle = socialEntry?.twitter || leg.id?.twitter || null;
+
+          const memberObj = {
+            name: fullName,
+            party: party,
+            office: term.office || 'Washington, D.C.',
+            phone: term.phone || '(202) 224-3121',
+            nextElection: term.end ? term.end.substring(0, 4) : 'Active',
+            url: officialUrl,
+            contactForm: contactForm,
+            xHandle: twitterHandle
+          };
+
+          if (term.type === 'sen') {
+            if (!newSenators[state]) newSenators[state] = [];
+            memberObj.class = term.class ? `Class ${term.class}` : '';
+            newSenators[state].push(memberObj);
+          } else if (term.type === 'rep') {
+            if (!newHouse[state]) newHouse[state] = [];
+            memberObj.district = (term.district === 0 || term.district === '0') ? 'At-Large' : `District ${term.district}`;
+            newHouse[state].push(memberObj);
+          }
+        });
+
+        SENATORS_DATA = newSenators;
+        HOUSE_DATA = newHouse;
+
+        localStorage.setItem('cached_senators_v3', JSON.stringify(newSenators));
+        localStorage.setItem('cached_house_v3', JSON.stringify(newHouse));
+
+        statusDot.className = "w-2 h-2 rounded-full bg-emerald-500";
+        statusText.textContent = "Synced API Data";
+
+        if (selectedStatePostal) {
+          displayStateDetails(selectedStatePostal);
+        }
+      } catch (err) {
+        console.error("Live API Fetch Failed:", err);
+        statusDot.className = "w-2 h-2 rounded-full bg-rose-500";
+        statusText.textContent = "Using Offline Cache";
+      } finally {
+        refreshIcon.classList.remove('spinning');
+        refreshBtn.classList.remove('opacity-75', 'pointer-events-none');
+        refreshText.textContent = "Refresh Data";
+      }
+    }
+
+    // --- Initialize D3 Map & Interactions ---
+    function initMap() {
+      svg = d3.select("#congress-map-svg")
+        .attr("viewBox", `0 0 ${width} ${height}`)
+        .attr("preserveAspectRatio", "xMidYMid meet");
+
+      g = svg.append("g").attr("id", "map-group");
+
+      zoomBehavior = d3.zoom()
+        .scaleExtent([1, 8])
+        .on("zoom", (event) => {
+          g.attr("transform", event.transform);
+        });
+
+      svg.call(zoomBehavior);
+
+      d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json").then(data => {
+        usTopoData = data;
+        renderMap();
+      }).catch(err => {
+        console.error("Error loading map TopoJSON:", err);
+      });
+    }
+
+    function renderMap() {
+      if (!usTopoData) return;
+
+      const states = topojson.feature(usTopoData, usTopoData.objects.states).features;
+      const projection = d3.geoAlbersUsa().scale(1280).translate([width / 2, height / 2]);
+      const path = d3.geoPath().projection(projection);
+
+      const statePaths = g.selectAll(".state-path")
+        .data(states, d => d.id);
+
+      statePaths.enter()
+        .append("path")
+        .attr("class", "state-path")
+        .attr("d", path)
+        .merge(statePaths)
+        .attr("fill", d => {
+          const postal = FIPS_TO_POSTAL[d.id.toString().padStart(2, "0")];
+          if (postal === selectedStatePostal) {
+            return document.documentElement.classList.contains('dark') ? '#4f46e5' : '#6366f1';
+          }
+          return document.documentElement.classList.contains('dark') ? '#334155' : '#cbd5e1';
+        })
+        .attr("stroke", document.documentElement.classList.contains('dark') ? '#1e293b' : '#ffffff')
+        .attr("stroke-width", "1.2")
+        .on("click", (event, d) => {
+          event.stopPropagation();
+          const postal = FIPS_TO_POSTAL[d.id.toString().padStart(2, "0")];
+          if (postal) {
+            zoomToState(d, path, postal);
+          }
+        });
+
+      const labels = g.selectAll(".state-label")
+        .data(states, d => d.id);
+
+      labels.enter()
+        .append("text")
+        .attr("class", "state-label")
+        .merge(labels)
+        .attr("transform", d => {
+          const centroid = path.centroid(d);
+          return isNaN(centroid[0]) ? "translate(-999,-999)" : `translate(${centroid[0]},${centroid[1]})`;
+        })
+        .attr("text-anchor", "middle")
+        .attr("dy", ".35em")
+        .attr("font-size", "10px")
+        .attr("fill", document.documentElement.classList.contains('dark') ? '#f8fafc' : '#0f172a')
+        .text(d => FIPS_TO_POSTAL[d.id.toString().padStart(2, "0")] || "");
+    }
+
+    // --- Zoom Navigation ---
+    function zoomToState(feature, pathGenerator, postal) {
+      selectedStatePostal = postal;
+      displayStateDetails(postal);
+
+      const bounds = pathGenerator.bounds(feature);
+      const dx = bounds[1][0] - bounds[0][0];
+      const dy = bounds[1][1] - bounds[0][1];
+      const x = (bounds[0][0] + bounds[1][0]) / 2;
+      const y = (bounds[0][1] + bounds[1][1]) / 2;
+      
+      const scale = Math.max(1, Math.min(6, 0.75 / Math.max(dx / width, dy / height)));
+      const translate = [width / 2 - scale * x, height / 2 - scale * y];
+
+      svg.transition()
+        .duration(1350)
+        .ease(d3.easeCubicInOut)
+        .call(
+          zoomBehavior.transform,
+          d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+        );
+
+      document.getElementById('zoom-out-btn').classList.remove('hidden');
+      document.getElementById('zoom-out-btn').classList.add('flex');
+      renderMap();
+    }
+
+    function resetMapZoom() {
+      selectedStatePostal = null;
+      svg.transition()
+        .duration(1100)
+        .ease(d3.easeCubicInOut)
+        .call(zoomBehavior.transform, d3.zoomIdentity);
+
+      document.getElementById('zoom-out-btn').classList.remove('flex');
+      document.getElementById('zoom-out-btn').classList.add('hidden');
+      renderMap();
+    }
+
+    // --- Side Drawer Renderer with X Handles & Official Email Links ---
+    function displayStateDetails(postal) {
+      const stateName = STATE_NAMES[postal] || postal;
+      document.getElementById('drawer-state-tag').textContent = `${postal} • DELEGATION`;
+      document.getElementById('drawer-state-title').textContent = stateName;
+
+      const senators = SENATORS_DATA[postal] || [];
+      const houseReps = HOUSE_DATA[postal] || [];
+
+      let html = `
+        <!-- Senate Section -->
+        <div>
+          <div class="flex items-center justify-between pb-2 mb-3 border-b border-slate-200 dark:border-slate-800">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              U.S. Senate (${senators.length} Seats)
+            </h3>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">6-Year Terms</span>
+          </div>
+          <div class="space-y-3">
+      `;
+
+      if (senators.length === 0) {
+        html += `<p class="text-xs text-slate-400 italic">No senator records loaded. Tap Refresh Data.</p>`;
+      } else {
+        senators.forEach(s => {
+          const partyClass = s.party === 'Democrat' 
+            ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800'
+            : s.party === 'Republican'
+            ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
+            : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800';
+
+          html += `
+            <div class="p-4 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm">
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="font-bold text-slate-900 dark:text-white">${s.name}</span>
+                <span class="px-2 py-0.5 text-xs font-semibold rounded-md border flex-shrink-0 ${partyClass}">
+                  ${s.party}
+                </span>
+              </div>
+              <div class="text-xs space-y-1 text-slate-600 dark:text-slate-300">
+                <p><span class="text-slate-400">Next Election:</span> <strong class="text-slate-700 dark:text-slate-200">${s.nextElection} ${s.class ? `(${s.class})` : ''}</strong></p>
+                <p><span class="text-slate-400">D.C. Office:</span> ${s.office}</p>
+                <p><span class="text-slate-400">Phone:</span> <a href="tel:${s.phone}" class="text-indigo-600 dark:text-indigo-400 font-medium hover:underline">${s.phone}</a></p>
+                
+                ${s.xHandle ? `
+                  <p class="flex items-center gap-1.5 pt-0.5">
+                    <span class="text-slate-400">Official X:</span>
+                    <a href="https://x.com/${s.xHandle}" target="_blank" class="inline-flex items-center gap-1 font-semibold text-slate-900 dark:text-slate-100 hover:text-indigo-600 dark:hover:text-indigo-400">
+                      <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                      @${s.xHandle}
+                    </a>
+                  </p>
+                ` : ''}
+              </div>
+
+              <!-- Quick Communication Action Bar -->
+              <div class="mt-3 pt-2.5 border-t border-slate-200 dark:border-slate-700/60 flex flex-wrap items-center gap-3">
+                ${s.contactForm ? `
+                  <a href="${s.contactForm}" target="_blank" class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                    </svg>
+                    Official Email / Contact Portal
+                  </a>
+                ` : ''}
+                ${s.url ? `
+                  <a href="${s.url}" target="_blank" class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300 font-medium hover:underline">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                    </svg>
+                    Website
+                  </a>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        });
+      }
+
+      html += `
+          </div>
+        </div>
+
+        <!-- House of Representatives Section -->
+        <div>
+          <div class="flex items-center justify-between pb-2 mb-3 border-b border-slate-200 dark:border-slate-800">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              U.S. House (${houseReps.length} District${houseReps.length > 1 ? 's' : ''})
+            </h3>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-400">2-Year Terms</span>
+          </div>
+          <div class="space-y-3">
+      `;
+
+      if (houseReps.length === 0) {
+        html += `<p class="text-xs text-slate-400 italic">No house representative records loaded. Tap Refresh Data.</p>`;
+      } else {
+        houseReps.forEach(r => {
+          const partyClass = r.party === 'Democrat' 
+            ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800'
+            : r.party === 'Republican'
+            ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
+            : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800';
+
+          html += `
+            <div class="p-4 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 rounded-xl shadow-sm">
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="font-bold text-slate-900 dark:text-white">${r.name}</span>
+                <span class="px-2 py-0.5 text-xs font-semibold rounded-md border flex-shrink-0 ${partyClass}">
+                  ${r.party}
+                </span>
+              </div>
+              <div class="text-xs space-y-1 text-slate-600 dark:text-slate-300">
+                <p><span class="text-slate-400">Jurisdiction:</span> <strong class="text-slate-700 dark:text-slate-200">${r.district}</strong></p>
+                <p><span class="text-slate-400">D.C. Office:</span> ${r.office}</p>
+                <p><span class="text-slate-400">Phone:</span> <a href="tel:${r.phone}" class="text-indigo-600 dark:text-indigo-400 font-medium hover:underline">${r.phone}</a></p>
+                
+                ${r.xHandle ? `
+                  <p class="flex items-center gap-1.5 pt-0.5">
+                    <span class="text-slate-400">Official X:</span>
+                    <a href="https://x.com/${r.xHandle}" target="_blank" class="inline-flex items-center gap-1 font-semibold text-slate-900 dark:text-slate-100 hover:text-indigo-600 dark:hover:text-indigo-400">
+                      <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                      @${r.xHandle}
+                    </a>
+                  </p>
+                ` : ''}
+              </div>
+
+              <!-- Quick Communication Action Bar -->
+              <div class="mt-3 pt-2.5 border-t border-slate-200 dark:border-slate-700/60 flex flex-wrap items-center gap-3">
+                ${r.contactForm ? `
+                  <a href="${r.contactForm}" target="_blank" class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                    </svg>
+                    Official Email / Contact Portal
+                  </a>
+                ` : ''}
+                ${r.url ? `
+                  <a href="${r.url}" target="_blank" class="inline-flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300 font-medium hover:underline">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                    </svg>
+                    Website
+                  </a>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        });
+      }
+
+      html += `
+          </div>
+        </div>
+      `;
+
+      document.getElementById('drawer-content-body').innerHTML = html;
+      
+      const panel = document.getElementById('details-panel-container');
+      panel.classList.remove('translate-x-full');
+    }
+
+    function closeDetailsPanel() {
+      const panel = document.getElementById('details-panel-container');
+      panel.classList.add('translate-x-full');
+    }
+
+    // --- DOM Event Listeners ---
+    document.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      loadCongressionalData(false);
+
+      // Clear Selection
+      document.getElementById('clear-selection-btn').addEventListener('click', () => {
+        resetMapZoom();
+        closeDetailsPanel();
+      });
+
+      // Zoom Out USA
+      document.getElementById('zoom-out-btn').addEventListener('click', () => {
+        resetMapZoom();
+        closeDetailsPanel();
+      });
+
+      // Close Details Drawer
+      document.getElementById('close-details-btn').addEventListener('click', () => {
+        closeDetailsPanel();
+      });
+
+      // Refresh Data Button -> Forces live API download
+      document.getElementById('refresh-page-btn').addEventListener('click', () => {
+        loadCongressionalData(true);
+      });
+
+      // Info Modal Open & Close
+      const infoModal = document.getElementById('info-modal');
+      document.getElementById('info-modal-trigger-btn').addEventListener('click', () => {
+        infoModal.classList.remove('hidden');
+      });
+      document.getElementById('close-info-modal-btn').addEventListener('click', () => {
+        infoModal.classList.add('hidden');
+      });
+      infoModal.addEventListener('click', (e) => {
+        if (e.target === infoModal) infoModal.classList.add('hidden');
+      });
+
+      // Dark / Light Mode Toggle
+      const themeToggle = document.getElementById('theme-toggle');
+      const themeLabel = document.getElementById('theme-label');
+      const toggleDot = document.getElementById('theme-toggle-dot');
+
+      function setTheme(isDark) {
+        if (isDark) {
+          document.documentElement.classList.add('dark');
+          themeLabel.textContent = 'Dark';
+          toggleDot.classList.add('translate-x-5');
+        } else {
+          document.documentElement.classList.remove('dark');
+          themeLabel.textContent = 'Light';
+          toggleDot.classList.remove('translate-x-5');
+        }
+        renderMap();
+      }
+
+      themeToggle.addEventListener('change', (e) => {
+        setTheme(e.target.checked);
+      });
+
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        themeToggle.checked = true;
+        setTheme(true);
+      }
+    });
+  </script>
+</body>
+</html>
